@@ -37,7 +37,7 @@ resource aiAccount 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     customSubDomainName: aiName
-    disableLocalAuth: false
+    disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
   }
 }
@@ -58,7 +58,7 @@ resource speech 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   sku: { name: 'S0' }
   properties: {
     customSubDomainName: speechName
-    disableLocalAuth: false
+    disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
   }
 }

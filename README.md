@@ -42,6 +42,14 @@ azd up
 ```
 Provisions everything and deploys the container. One command.
 
+## Notes & limitations
+- **Public, unauthenticated endpoint.** The Container App ingress is external and `/api/chat`
+  has no authentication or rate limiting (this is a sample). Anyone with the URL can drive
+  Azure OpenAI usage — add auth and/or throttling before any real deployment, and mind cost.
+- **Avatar region availability.** The real-time (Text-to-Speech) avatar is only offered in a
+  subset of Azure regions. Choose an `AZURE_LOCATION` that supports it; otherwise provisioning
+  succeeds but the avatar fails to start at runtime (shown as the on-screen error banner).
+
 ## How turn-taking works
 STT ends your turn after a short trailing silence; the mic auto-pauses while the agent
 thinks and the avatar speaks, then resumes — unless you've muted. Failures surface as an

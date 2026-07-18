@@ -20,6 +20,7 @@ const machine = createMachine();
 
 let recognizer = null;
 let avatarSynthesizer = null;
+let peerConnection = null;
 let auth = null;            // { authToken, region, resourceId, rawToken }
 let refreshTimer = null;
 let idleTimer = null;
@@ -95,6 +96,11 @@ async function askAgent(userText) {
 }
 
 async function onFinalUserText(text) {
+  // Ignore stray/duplicate final recognitions: only a genuine, unmuted Listening turn
+  // starts a new exchange. Without this, a second recognition (common when the user keeps
+  // talking, or in noisy rooms) would fire a concurrent /api/chat call and overlapping
+  // avatar speech, breaking half-duplex turn-taking.
+  if (machine.state.name !== States.Listening || machine.state.muted) return;
   clearError();                        // a new user turn clears any prior error banner
   els.caption.textContent = text;
   machine.dispatch(Events.Recognized); // Listening -> Thinking (mic auto-pauses)
@@ -150,6 +156,7 @@ async function connect() {
         },
       });
     avatarSynthesizer = created.avatarSynthesizer;
+    peerConnection = created.peerConnection;
 
     refreshTimer = setInterval(refreshTokens, REFRESH_INTERVAL_MS);
 
@@ -169,8 +176,12 @@ function teardown() {
   clearTimeout(idleTimer);
   try { recognizer?.close(); } catch { /* ignore */ }
   try { avatarSynthesizer?.close(); } catch { /* ignore */ }
+  try { peerConnection?.close(); } catch { /* ignore */ }
+  els.video.srcObject = null;
+  els.audio.srcObject = null;
   recognizer = null;
   avatarSynthesizer = null;
+  peerConnection = null;
 }
 
 els.start.addEventListener('click', () => {
