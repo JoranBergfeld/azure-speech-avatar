@@ -29,5 +29,8 @@ public class SpeechTokenEndpointTests
         var response = await client.GetAsync("/api/speech/token");
 
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ProblemDetails>();
+        Assert.NotNull(problem);
+        Assert.Equal("speech_token_failed", problem!.Title);
     }
 }
