@@ -3,6 +3,7 @@ import * as Speech from './speech.js';
 
 const REFRESH_INTERVAL_MS = 9 * 60 * 1000; // refresh AAD token before ~1h expiry
 const IDLE_TIMEOUT_MS = 60 * 1000;         // return to idle after a quiet minute
+const GREETING = 'Hello! Just start talking whenever you are ready — how can I help?';
 
 const els = {
   video: document.getElementById('avatar-video'),
@@ -57,19 +58,26 @@ async function stopRecognition() {
   await new Promise((resolve) => recognizer.stopContinuousRecognitionAsync(resolve, resolve));
 }
 
-// React to state changes: drive mic + status UI.
+// React to state changes: drive mic + status UI. The mic runs ONLY while actively
+// listening AND not muted, so we never capture the avatar's own speech (half-duplex)
+// and Mute genuinely stops the microphone.
 machine.subscribe(async (state) => {
-  els.status.textContent = state.name;
-  els.status.dataset.state = state.name;
+  const listening = state.name === States.Listening && !state.muted;
+  const display = state.muted && state.name === States.Listening ? States.Muted : state.name;
+  els.status.textContent = display;
+  els.status.dataset.state = display;
   els.mute.textContent = state.muted ? 'Unmute' : 'Mute';
 
-  if (state.name === States.Listening) {
-    clearError();
-    await startRecognition();
-    armIdleTimer();
-  } else {
-    clearTimeout(idleTimer);
-    await stopRecognition();
+  try {
+    if (listening) {
+      await startRecognition();
+      armIdleTimer();
+    } else {
+      clearTimeout(idleTimer);
+      await stopRecognition();
+    }
+  } catch (e) {
+    showError(`Microphone problem: ${e.message}`);
   }
 
   if (state.name === States.Idle) teardown();
@@ -87,25 +95,39 @@ async function askAgent(userText) {
 }
 
 async function onFinalUserText(text) {
+  clearError();                        // a new user turn clears any prior error banner
   els.caption.textContent = text;
-  machine.dispatch(Events.Recognized); // -> Thinking (mic auto-pauses)
+  machine.dispatch(Events.Recognized); // Listening -> Thinking (mic auto-pauses)
+
+  let reply;
   try {
-    const reply = await askAgent(text);
-    machine.dispatch(Events.ReplyReady); // -> Speaking
-    els.caption.textContent = reply;
-    await Speech.speak(avatarSynthesizer, reply);
+    reply = await askAgent(text);
   } catch (e) {
-    machine.dispatch(Events.ReplyFailed); // -> Error (explicit)
+    // Explicit-but-graceful: show the failure, then recover the loop so the user can retry.
+    machine.dispatch(Events.ReplyFailed);    // Thinking -> Error (visible)
     showError(`Sorry — I hit a problem answering that: ${e.message}`);
-    // Recover the conversation loop so the user can try again.
-    machine.dispatch(Events.RetrySucceeded);
+    machine.dispatch(Events.RetrySucceeded); // Error -> Listening (or Muted); banner persists
+    return;
+  }
+
+  machine.dispatch(Events.ReplyReady); // Thinking -> Speaking
+  els.caption.textContent = reply;
+  try {
+    await Speech.speak(avatarSynthesizer, reply);
+    // Completion is signalled by the avatar's idle event (onSwitchToIdle -> SynthesisComplete).
+  } catch (e) {
+    // Speaking failed: surface it and resume listening so the conversation continues.
+    showError(`Sorry — I couldn't play that response: ${e.message}`);
+    machine.dispatch(Events.SynthesisComplete); // Speaking -> Listening (or Muted)
   }
 }
 
 async function connect() {
-  machine.dispatch(Events.Start); // -> Connecting
+  clearError();
+  machine.dispatch(Events.Start); // Idle -> Connecting
   try {
     await refreshTokens();
+    if (!auth) throw new Error('could not obtain a Speech token');
     const iceServer = await Speech.fetchIceServer(auth.region, auth.rawToken);
 
     recognizer = Speech.createRecognizer(auth.authToken, auth.region, {
@@ -117,19 +139,28 @@ async function connect() {
     const created = await Speech.createAvatar(auth.authToken, auth.region, iceServer,
       els.video, els.audio, {
         onTurnStart: () => { /* avatar started speaking */ },
-        onSwitchToIdle: () => machine.dispatch(Events.SynthesisComplete),
-        onSessionEnd: () => { showError('The avatar session ended. Press Start to reconnect.'); machine.dispatch(Events.Stop); },
+        onSwitchToIdle: () => {
+          // First idle = greeting finished -> start listening; later idles = a reply finished.
+          if (machine.state.name === States.Connecting) machine.dispatch(Events.Connected);
+          else machine.dispatch(Events.SynthesisComplete);
+        },
+        onSessionEnd: () => {
+          showError('The avatar session ended. Press Start to reconnect.');
+          machine.dispatch(Events.Stop); // -> Idle (teardown)
+        },
       });
     avatarSynthesizer = created.avatarSynthesizer;
 
     refreshTimer = setInterval(refreshTokens, REFRESH_INTERVAL_MS);
 
-    // Greet, then begin listening.
-    machine.dispatch(Events.Connected);
-    await Speech.speak(avatarSynthesizer, 'Hello! Press the microphone question any time. How can I help?');
+    // Greet while still Connecting (mic OFF). onSwitchToIdle flips us to Listening when done,
+    // so we never listen over the greeting (half-duplex).
+    await Speech.speak(avatarSynthesizer, GREETING);
   } catch (e) {
-    machine.dispatch(Events.ConnectFailed);
+    // Explicit-but-graceful: show the failure and return to Idle so Start can retry.
+    machine.dispatch(Events.ConnectFailed); // Connecting -> Error (visible)
     showError(`Could not start the avatar: ${e.message}`);
+    machine.dispatch(Events.GiveUp);        // Error -> Idle (runs teardown; Start works again)
   }
 }
 
