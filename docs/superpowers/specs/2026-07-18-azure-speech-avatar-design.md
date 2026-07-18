@@ -42,7 +42,7 @@ to run and deploy with a single command.
 |---|----------|--------|-----|
 | 1 | App shape | **ASP.NET Core Web API + lightweight JS frontend** | The real-time avatar (WebRTC) and Speech-to-Text run in the browser via the **JavaScript Speech SDK** — there is no .NET-native avatar rendering. A JS-native frontend follows the SDK's grain; the .NET backend stays a clean token + chat API. Performance is a wash vs. Blazor because the heavy media path is identical. |
 | 2 | Grounding | **Persona in the agent's instructions (system prompt) + few-shot Q&A. No File Search / vector store.** | The supplied content is persona/behavioral guidance, not a fact corpus. Persona rules must apply on **every** turn; File Search only retrieves *sometimes* (query-dependent), which would make the persona inconsistent. It is small enough to live in the prompt. Dropping the managed vector store also **avoids the ALZ/MCAP guardrail risk**. |
-| 3 | Agent host | **Azure AI Foundry Agent Service** (agent = instructions + model + threads), driven by **MAF** in .NET | Managed agent + per-session threads (memory) with minimal plumbing; MAF is the orchestration SDK. |
+| 3 | Agent host | **MAF `ChatClientAgent`** (`Microsoft.Agents.AI`) over an **Azure AI Foundry (AIServices) GPT-4.1 model**, with conversation held in an **in-process MAF thread per session** | Leverages MAF with the Foundry-hosted model, but keeps memory in-process. This deliberately avoids the Foundry **Agent Service** persistent-thread path, which requires a capability host (Cosmos DB + Storage + AI Search) — extra infra and more guardrail exposure. In-process memory is fine for a demo (resets on restart). |
 | 4 | Model | **GPT-4.1** | Voice needs low latency + faithful instruction-following, not deep reasoning. Avoid reasoning models (gpt-5.x / o-series): they add seconds of hidden "thinking" and have the known empty-reply gotcha. Cost is not a constraint. Confirm gpt-4.1 availability in the target region (swedencentral). |
 | 5 | Turn-taking | **Half-duplex, no voice barge-in** | Robust in noisy rooms: mic auto-pauses while the avatar thinks/speaks, so noise/echo cannot self-trigger STT. |
 | 6 | Auth | **Keyless — Entra ID + Managed Identity** | No Key Vault / secrets to trip the private-KV policy. Browser never sees a key. |
@@ -62,7 +62,7 @@ flowchart LR
         Chat["POST /api/chat -> MAF"]
     end
     subgraph Azure["③ Azure services"]
-        Foundry["AI Foundry Agent (instructions + GPT-4.1 + threads)"]
+        Foundry["AI Foundry (AIServices): GPT-4.1 model deployment"]
         Speech["Azure Speech (avatar TTS+video, STT)"]
         Entra["Entra ID (RBAC)"]
     end
@@ -72,8 +72,7 @@ flowchart LR
     UI -->|fetch| Token
     UI -->|recognized text| Chat
     Token -->|Managed Identity| Speech
-    Chat -->|MAF| Foundry
-    Foundry --> AOAI["Azure OpenAI GPT-4.1"]
+    Chat -->|MAF ChatClientAgent| Foundry
     Backend -.->|MI tokens| Entra
 ```
 
@@ -94,7 +93,7 @@ flowchart LR
 - **Serves** the static JS app.
 - **`GET /api/speech/token`** — returns a short-lived Speech authorization token (obtained via Managed Identity) plus the region. No key leaves the server.
 - **`POST /api/chat`** — body: recognized text + session/thread id. Runs the MAF agent against the Foundry-hosted agent's thread and returns the reply text (and citations if any, though citations are unused in the persona-only v1).
-- **MAF integration:** the backend uses the Microsoft Agent Framework .NET SDK as the client that runs the Foundry agent. A **thread per browser session** provides multi-turn memory.
+- **MAF integration:** the backend uses the Microsoft Agent Framework (`Microsoft.Agents.AI`) **`ChatClientAgent`** over the Foundry-hosted **GPT-4.1** model. A **MAF `AgentThread` per browser session, held in an in-memory cache**, provides multi-turn memory. This is intentionally **in-process** — no server-side thread storage, so **no capability host (Cosmos/Storage/AI Search) is required**.
 - **Note:** exact MAF / Foundry SDK package and API names are verified against official docs during implementation. No fabricated endpoints; any unconfirmable call becomes a documented manual step.
 
 ### 5.3 Conversation flow (state machine)
@@ -124,7 +123,7 @@ stateDiagram-v2
 
 ### 5.4 Grounding (persona)
 - A repo file **`persona/persona.md`** holds the persona description, behavioral rules, and few-shot Q&A samples.
-- Provisioning injects this content into the **Foundry agent's instructions**. The persona instructs **short, conversational, spoken-friendly** answers and to **say "I don't know" when the persona/Q&A does not cover a question** (no hallucinating).
+- The backend **loads this file at startup and uses it as the agent's instructions** (system prompt) — there is no separate server-side agent resource to provision. The persona instructs **short, conversational, spoken-friendly** answers and to **say "I don't know" when the persona/Q&A does not cover a question** (no hallucinating).
 - **No vector store / File Search** in v1. If a factual knowledge base appears later, File Search can be added without changing the frontend or API.
 
 ### 5.5 Auth and identity
@@ -156,8 +155,8 @@ Targeted, not exhaustive (this is a sample):
 - **Smoke script:** verifies the token endpoint returns a token and `/api/chat` returns a grounded reply.
 
 ## 7. Deployment
-- **`azd`** provisions and deploys: the Container App + environment, the Azure OpenAI **gpt-4.1** deployment, the Foundry project/agent, role assignments (Managed Identity), and Log Analytics — all via **Bicep** in `infra/`.
-- A **post-provision step** creates/updates the Foundry agent's instructions from `persona/persona.md`.
+- **`azd`** provisions and deploys via **Bicep** in `infra/`: the **Azure AI Foundry (AIServices) account** + **gpt-4.1** model deployment, the **Container App** + environment (with system-assigned Managed Identity), **Log Analytics**, and the **role assignments** (Speech + model). No Cosmos/Storage/AI Search, no capability host.
+- The **persona** ships in the container and is loaded at startup as the agent's instructions — **no post-provision agent-creation step** is required.
 - **One command:** `azd up`.
 
 ## 8. Project layout (single repo)
@@ -172,9 +171,9 @@ README.md
 ```
 
 ## 9. Risks and open items
-- **MAF ↔ Foundry API surface is new.** Exact SDK packages/APIs (agent creation, thread run, instruction update) are verified against official docs at implementation time; unconfirmable calls become documented manual steps.
+- **MAF API surface is new.** Target packages are `Microsoft.Agents.AI` + the Azure OpenAI chat client; exact `ChatClientAgent` / `AgentThread` / `RunAsync` signatures are confirmed against the installed package version at implementation time (the plan carries the current verified form). No fabricated APIs.
 - **Model availability:** confirm **gpt-4.1** is deployable in the target region (swedencentral); otherwise pick the closest fast, non-reasoning instruction-following model.
-- **Guardrail contingency:** the keyless, no-vector-store design should satisfy ALZ/MCAP policies. If any managed dependency is still blocked, fall back accordingly (e.g., MAF directly over Azure OpenAI) without changing the frontend/API contract.
+- **Guardrail contingency:** the keyless design uses **no Key Vault, no vector store, and no capability-host stores** (Cosmos/Storage/AI Search), so it should satisfy ALZ/MCAP policies. The only Azure data-plane dependencies are the Speech and Foundry model endpoints reached with Managed Identity.
 
 ## 10. Future enhancements
 Voice barge-in (with echo cancellation); File Search for a real knowledge base; multiple personas + switching UI; end-user auth; conversation persistence/analytics; multi-language UI.
