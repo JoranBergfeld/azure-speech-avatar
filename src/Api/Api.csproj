@@ -13,4 +13,10 @@
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.13.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\persona\persona.md" Link="persona\persona.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
