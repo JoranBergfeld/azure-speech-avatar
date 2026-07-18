@@ -31,6 +31,9 @@ builder.Services.AddSingleton<IAvatarAgent, MafAvatarAgent>();
 
 var app = builder.Build();
 
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.MapGet("/healthz", () => Results.Text("ok"));
 
 app.MapGet("/api/speech/token", async (ISpeechTokenProvider provider, ILogger<Program> logger, CancellationToken ct) =>

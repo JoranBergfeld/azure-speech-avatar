@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Azure Speech Avatar</title>
+  <link rel="stylesheet" href="/css/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@1.43.0/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle.js"></script>
+</head>
+<body>
+  <main class="stage">
+    <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+    <div class="avatar-wrap">
+      <video id="avatar-video" autoplay playsinline></video>
+      <audio id="avatar-audio" autoplay></audio>
+      <span id="status-chip" class="status-chip" data-state="idle">idle</span>
+    </div>
+
+    <p id="caption" class="caption" aria-live="polite"></p>
+
+    <div class="controls">
+      <button id="start-btn" class="btn btn-primary" type="button">Start conversation</button>
+      <button id="mute-btn" class="btn" type="button">Mute</button>
+    </div>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
