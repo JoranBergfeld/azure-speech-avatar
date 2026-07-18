@@ -1,1 +1,14 @@
 .superpowers/
+
+# .NET build output
+bin/
+obj/
+*.user
+
+# Node
+node_modules/
+
+# azd / local environment
+.azure/
+.env
+*.local
