@@ -35,3 +35,12 @@ public sealed class FakeAvatarAgent : IAvatarAgent
         return Task.FromResult(_reply!);
     }
 }
+
+/// <summary>Simulates a credential/network failure.</summary>
+public sealed class ThrowingCredential : Azure.Core.TokenCredential
+{
+    public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext c, CancellationToken t)
+        => throw new System.InvalidOperationException("no managed identity");
+    public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext c, CancellationToken t)
+        => throw new System.InvalidOperationException("no managed identity");
+}
